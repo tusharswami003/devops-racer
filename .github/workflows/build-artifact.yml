@@ -1,0 +1,86 @@
+name: Build and Upload Game Artifact
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+  S3_BUCKET: devops-racer
+  S3_PREFIX: artifatcts
+
+jobs:
+  build-artifact:
+    name: Package and Upload Game
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+
+      - name: Generate Artifact Name
+        id: artifact
+        shell: bash
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          ARTIFACT_NAME="devops-racer-${SHORT_SHA}.zip"
+
+          echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Artifact: ${ARTIFACT_NAME}"
+
+      - name: Package Game
+        shell: bash
+        run: |
+          zip -r "${{ steps.artifact.outputs.artifact_name }}" . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x "*.zip"
+
+          echo "Created artifact:"
+          ls -lh "${{ steps.artifact.outputs.artifact_name }}"
+
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::190944421381:role/github-actions-devops-racer
+          aws-region: ap-south-1
+
+
+      - name: Verify AWS Identity
+        run: |
+          aws sts get-caller-identity
+
+      - name: Upload Versioned Artifact to S3
+        run: |
+          aws s3 cp \
+            "${{ steps.artifact.outputs.artifact_name }}" \
+            "s3://${S3_BUCKET}/${S3_PREFIX}/${{ steps.artifact.outputs.artifact_name }}"
+
+
+      - name: Upload Latest Artifact
+        run: |
+          aws s3 cp \
+            "${{ steps.artifact.outputs.artifact_name }}" \
+            "s3://${S3_BUCKET}/${S3_PREFIX}/latest.zip"
+
+
+      - name: Build Summary
+        run: |
+          echo "============================================"
+          echo "Game artifact successfully uploaded"
+          echo "============================================"
+          echo ""
+          echo "Versioned artifact:"
+          echo "s3://${S3_BUCKET}/${S3_PREFIX}/${{ steps.artifact.outputs.artifact_name }}"
+          echo ""
+          echo "Latest artifact:"
+          echo "s3://${S3_BUCKET}/${S3_PREFIX}/latest.zip"
+          echo ""
+          echo "Git Commit:"
+          echo "${GITHUB_SHA}"
