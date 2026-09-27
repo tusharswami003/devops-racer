@@ -10,7 +10,7 @@ permissions:
 env:
   AWS_REGION: ap-south-1
   S3_BUCKET: devops-racer
-  S3_PREFIX: artifatcts
+  S3_PREFIX: artifacts
 
 jobs:
   build-artifact:
