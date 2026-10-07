@@ -69,6 +69,50 @@ jobs:
             "${{ steps.artifact.outputs.artifact_name }}" \
             "s3://${S3_BUCKET}/${S3_PREFIX}/latest.zip"
 
+      - name: Checkout GitOps Repository
+        uses: actions/checkout@v7
+        with:
+          repository: tusharswami003/eks-platform-config
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: eks-platform-config
+
+
+      - name: Update Test Artifact Version
+        shell: bash
+        run: |
+          RELEASE_FILE="eks-platform-config/test/applications/tushar-web/release.env"
+
+          echo "Current release:"
+          cat "$RELEASE_FILE"
+
+          echo "ARTIFACT_NAME=${{ steps.artifact.outputs.artifact_name }}" \
+            > "$RELEASE_FILE"
+
+          echo ""
+          echo "New release:"
+          cat "$RELEASE_FILE"
+
+
+      - name: Commit GitOps Release
+        shell: bash
+        run: |
+          cd eks-platform-config
+
+          git config user.name "devops-racer-ci"
+          git config user.email "devops-racer-ci@users.noreply.github.com"
+
+          git add test/applications/tushar-web/release.env
+
+          if git diff --cached --quiet; then
+            echo "GitOps repository already references this artifact."
+            exit 0
+          fi
+
+          git commit \
+            -m "Deploy ${{ steps.artifact.outputs.artifact_name }} to test"
+
+          git push origin main
+
 
       - name: Build Summary
         run: |
