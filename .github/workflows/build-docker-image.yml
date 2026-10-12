@@ -1,15 +1,20 @@
 
-name: Docker Build and Test
+name: Docker Build, Test and Push
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: devops-racer
 
 jobs:
-  docker-build-and-test:
-    name: Build and smoke-test Docker image
+  docker-build-test-push:
+    name: Build, test and publish Docker image
     runs-on: ubuntu-latest
 
     steps:
@@ -37,43 +42,82 @@ jobs:
           CONTAINER="devops-racer-smoke-test"
           RESPONSE="${RUNNER_TEMP}/devops-racer-index.html"
 
-          # Start the container and publish port 80 locally
-          # on the GitHub Actions runner.
           docker run --detach --rm \
             --name "${CONTAINER}" \
             --publish 127.0.0.1:8080:80 \
             "${IMAGE}"
 
-          # Always stop and remove the test container.
           cleanup() {
             docker stop "${CONTAINER}" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
 
-          # Give Nginx up to 30 seconds to serve the website.
           for attempt in $(seq 1 30); do
             if curl --fail --silent \
               --output "${RESPONSE}" \
               http://127.0.0.1:8080/; then
               break
             fi
-
             sleep 1
           done
 
-          # Fail if the container did not serve a page.
           if [[ ! -s "${RESPONSE}" ]]; then
-            echo "::error::Container did not return a non-empty HTTP success response."
-            docker logs "${CONTAINER}"
+            echo "::error::Container did not serve a non-empty HTTP response."
+            docker logs "${CONTAINER}" || true
             exit 1
           fi
 
-          # Confirm that the response looks like HTML.
           if ! grep -Eiq '<!doctype html|<html' "${RESPONSE}"; then
-            echo "::error::Response is not recognized as an HTML page."
+            echo "::error::Response does not look like an HTML page."
             head -c 500 "${RESPONSE}"
-            docker logs "${CONTAINER}"
             exit 1
           fi
 
-          echo "Smoke test passed: the container served an HTML page."
+          echo "Docker smoke test passed."
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::190944421381:role/github-actions-devops-racer
+          aws-region: ap-south-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2.1.6
+
+      - name: Check whether image already exists
+        id: check-existing-image
+        shell: bash
+        run: |
+          if aws ecr describe-images \
+            --region "${AWS_REGION}" \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-ids "imageTag=${GITHUB_SHA}" \
+            >/dev/null 2>&1; then
+
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "This commit's image already exists; it will not be overwritten."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Tag and push image to ECR
+        if: steps.check-existing-image.outputs.exists != 'true'
+        shell: bash
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          REMOTE_IMAGE="${REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+
+          docker tag \
+            "devops-racer:${IMAGE_TAG}" \
+            "${REMOTE_IMAGE}"
+
+          docker push "${REMOTE_IMAGE}"
+
+          echo "### Docker image published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${REMOTE_IMAGE}\`" >> "$GITHUB_STEP_SUMMARY"
